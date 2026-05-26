@@ -1,0 +1,29 @@
+name: Build EXE
+
+on:
+  workflow_dispatch:   # se lanza a mano desde la web de GitHub
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: |
+          pip install pyinstaller pandas openpyxl python-pptx matplotlib
+
+      - name: Construir EXE
+        run: |
+          pyinstaller --onefile generarDashboardMes.py
+
+      - name: Subir EXE como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: generarDashboardMes
+          path: dist/generarDashboardMes.exe
