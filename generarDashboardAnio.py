@@ -738,7 +738,12 @@ def main():
     etiqueta_periodo  = str(args.anio)
     anio_anterior     = str(args.anio - 1)
 
-    carpeta = os.path.dirname(os.path.abspath(__file__))
+    # sys.frozen es True cuando se ejecuta como .exe compilado con PyInstaller.
+    # En ese caso __file__ apunta a la carpeta temporal, no al .exe real.
+    if getattr(sys, "frozen", False):
+        carpeta = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        carpeta = os.path.dirname(os.path.abspath(__file__))
 
     print(f"\n🚀 Iniciando — {etiqueta_periodo}, hasta {mapa_meses[codigos_ordenados[-1]]}")
     print(f"   Meses: {[mapa_meses[c] for c in codigos_ordenados]}")
