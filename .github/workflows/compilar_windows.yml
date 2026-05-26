@@ -25,7 +25,7 @@ jobs:
 
     - name: Compilar el script a un único archivo .EXE
       run: |
-        pyinstaller --onefile --hidden-import=playwright.cli.main dashboard_local_mensual.py
+        pyinstaller --onefile --collect-all playwright dashboard_local_mensual.py
 
     - name: Subir el ejecutable terminado a GitHub
       uses: actions/upload-artifact@v4
