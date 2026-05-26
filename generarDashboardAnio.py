@@ -161,7 +161,21 @@ def leer_informes(carpeta, meses_a_procesar):
                 continue
 
             cabecera = [str(c).strip() if c is not None else "" for c in filas[0]]
-            df = pd.DataFrame(filas[1:], columns=cabecera)
+            n_cols = len(cabecera)
+
+            # Normalizar cada fila al mismo nº de columnas que la cabecera.
+            # openpyxl puede devolver filas más largas (celdas combinadas) o más
+            # cortas (filas incompletas al final), lo que rompe pd.DataFrame.
+            filas_norm = []
+            for fila in filas[1:]:
+                fila = list(fila)
+                if len(fila) < n_cols:
+                    fila += [None] * (n_cols - len(fila))
+                else:
+                    fila = fila[:n_cols]
+                filas_norm.append(fila)
+
+            df = pd.DataFrame(filas_norm, columns=cabecera)
 
             if 'Work Order ID' not in df.columns:
                 continue
