@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows EXEs
 
 on:
   push:
@@ -22,13 +22,24 @@ jobs:
         run: |
           pip install pandas openpyxl xlsxwriter pyinstaller
 
-      - name: Compilar EXE con PyInstaller
+      - name: Compilar generarDashboardAnio.exe
         run: |
           pyinstaller --onefile --name generarDashboardAnio generarDashboardAnio.py
 
-      - name: Subir EXE como artefacto
+      - name: Compilar generarDashboardMes.exe
+        run: |
+          pyinstaller --onefile --name generarDashboardMes generarDashboardMes.py
+
+      - name: Subir generarDashboardAnio.exe
         uses: actions/upload-artifact@v4
         with:
           name: generarDashboardAnio
           path: dist/generarDashboardAnio.exe
+          retention-days: 30
+
+      - name: Subir generarDashboardMes.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: generarDashboardMes
+          path: dist/generarDashboardMes.exe
           retention-days: 30
