@@ -537,7 +537,12 @@ def main():
 
     cod         = MESES_COD[mes]
     nombre_base = f"{anio}_{cod}_{mes}_Informe Mensual Aprovisionamiento de Datos"
-    carpeta     = os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, 'frozen', False):
+        # Ejecutando como .exe compilado
+        carpeta = os.path.dirname(sys.executable)
+    else:
+        # Ejecutando como script .py normal
+        carpeta = os.path.dirname(os.path.abspath(__file__))
     ruta_xlsx   = os.path.join(carpeta, f"{nombre_base}.xlsx")
 
     if not os.path.exists(ruta_xlsx):
