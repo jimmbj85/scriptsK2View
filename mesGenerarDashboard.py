@@ -370,9 +370,9 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
     from openpyxl.chart import BarChart, Reference
     from openpyxl.chart.series import SeriesLabel
-    from openpyxl.chart.data_source import NumDataSource, NumRef
-    from openpyxl.drawing.fill import PatternFillProperties
+    from openpyxl.chart.label import DataLabelList
     from openpyxl.utils import get_column_letter
+    from lxml import etree
 
     orden_cols = ORDEN_CATS
 
@@ -475,39 +475,79 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     ws["F4"].border    = thin_border()
 
     # ── Gráfico de columnas ──────────────────────────────────────────────────
-    # Una serie por barra es el método robusto para garantizar colores propios
-    # en todas las versiones de Excel. Con DataPoint el color puede ignorarse.
-    # grouping="stacked" con overlap=100 sobre series de 1 punto cada una da
-    # el aspecto visual de un gráfico de columnas agrupadas con colores fijos.
+    # Una serie por barra garantiza colores propios en todas las versiones de Excel.
+    # Altura: el gráfico empieza en fila 6; ajustamos para acabar antes de fila 20.
+    #   14 filas × 15 pt/fila × 0.0353 cm/pt ≈ 7.4 cm → usamos 7.0 cm.
     chart = BarChart()
-    chart.type      = "col"
-    chart.grouping  = "clustered"
-    chart.title     = "Tiempo Medio (Horas)"
+    chart.type         = "col"
+    chart.grouping     = "clustered"
+    chart.title        = "Tiempo Medio (Horas)"
     chart.y_axis.title = "Horas"
     chart.x_axis.title = "Categorías"
-    chart.width     = 20
-    chart.height    = 12
+    chart.width        = 20
+    chart.height       = 7      # ← reducido para caber en filas 6-19
+
+    # Namespaces OOXML para inyectar etiquetas con fuente blanca negrita
+    _nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    _nsC = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+    def _dLbls_blanco(num_fmt="0.00"):
+        """Devuelve un nodo <c:dLbls> con valor visible, posición inEnd y fuente blanca negrita."""
+        dLbls = etree.Element(f"{{{_nsC}}}dLbls")
+        # formato numérico
+        nf = etree.SubElement(dLbls, f"{{{_nsC}}}numFmt")
+        nf.set("formatCode", num_fmt)
+        nf.set("sourceLinked", "0")
+        # propiedades de texto (txPr) → fuente blanca negrita 10pt
+        txPr = etree.SubElement(dLbls, f"{{{_nsC}}}txPr")
+        bodyPr = etree.SubElement(txPr, f"{{{_nsA}}}bodyPr")
+        bodyPr.set("rot", "0")
+        etree.SubElement(txPr, f"{{{_nsA}}}lstStyle")
+        p   = etree.SubElement(txPr, f"{{{_nsA}}}p")
+        pPr = etree.SubElement(p, f"{{{_nsA}}}pPr")
+        dPr = etree.SubElement(pPr, f"{{{_nsA}}}defRPr")
+        dPr.set("b",    "1")
+        dPr.set("sz",   "1000")   # 10 pt en centésimas de punto
+        dPr.set("lang", "es-ES")
+        solidFill = etree.SubElement(dPr, f"{{{_nsA}}}solidFill")
+        srgb = etree.SubElement(solidFill, f"{{{_nsA}}}srgbClr")
+        srgb.set("val", "FFFFFF")  # blanco
+        # mostrar valor y posición dentro de la barra (inEnd)
+        showVal = etree.SubElement(dLbls, f"{{{_nsC}}}showVal")
+        showVal.set("val", "1")
+        showLegendKey = etree.SubElement(dLbls, f"{{{_nsC}}}showLegendKey")
+        showLegendKey.set("val", "0")
+        showCatName   = etree.SubElement(dLbls, f"{{{_nsC}}}showCatName")
+        showCatName.set("val", "0")
+        showSerName   = etree.SubElement(dLbls, f"{{{_nsC}}}showSerName")
+        showSerName.set("val", "0")
+        showPercent   = etree.SubElement(dLbls, f"{{{_nsC}}}showPercent")
+        showPercent.set("val", "0")
+        showBubbleSize = etree.SubElement(dLbls, f"{{{_nsC}}}showBubbleSize")
+        showBubbleSize.set("val", "0")
+        dLblPos = etree.SubElement(dLbls, f"{{{_nsC}}}dLblPos")
+        dLblPos.set("val", "inEnd")
+        return dLbls
 
     # Una categoría compartida para el eje X (fila 1, cols B-E)
     cats = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
 
     for i, id_p in enumerate(ORDEN):
-        r, g, b = MAPA[id_p]["rgb"]
-        hex_rgb = f"{r:02X}{g:02X}{b:02X}"
-        col     = i + 2                          # columna B=2, C=3, D=4, E=5
+        r, g, b  = MAPA[id_p]["rgb"]
+        hex_rgb  = f"{r:02X}{g:02X}{b:02X}"
+        col      = i + 2          # columna B=2, C=3, D=4, E=5
         cat_name = MAPA[id_p]["n"]
 
-        # Valor: una sola celda de la fila 2 (horas)
         values = Reference(ws, min_col=col, max_col=col, min_row=2, max_row=2)
         chart.add_data(values)
 
         serie = chart.series[i]
-        # Nombre de la serie = la cabecera de la columna (fila 1)
         serie.title = SeriesLabel(v=cat_name)
-        # Color de relleno de la barra
-        serie.graphicalProperties.solidFill = hex_rgb
-        # Borde del mismo color para que quede limpio
-        serie.graphicalProperties.line.solidFill = hex_rgb
+        serie.graphicalProperties.solidFill          = hex_rgb
+        serie.graphicalProperties.line.solidFill     = hex_rgb
+
+        # Inyectar <c:dLbls> con fuente blanca directamente en el XML de la serie
+        serie._element.append(_dLbls_blanco())
 
     chart.set_categories(cats)
     ws.add_chart(chart, "A6")
