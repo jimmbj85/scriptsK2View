@@ -369,7 +369,9 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     """
     from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
     from openpyxl.chart import BarChart, Reference
-    from openpyxl.chart.series import DataPoint
+    from openpyxl.chart.series import SeriesLabel
+    from openpyxl.chart.data_source import NumDataSource, NumRef
+    from openpyxl.drawing.fill import PatternFillProperties
     from openpyxl.utils import get_column_letter
 
     orden_cols = ORDEN_CATS
@@ -473,36 +475,41 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     ws["F4"].border    = thin_border()
 
     # ── Gráfico de columnas ──────────────────────────────────────────────────
-    # Los gráficos en OOXML son objetos XML independientes — NO son imágenes.
-    # Hay que crearlos con la API nativa de openpyxl; no se pueden transferir
-    # desde xlsxwriter leyendo ws._images (que solo contiene PNG/JPEG embebidos).
+    # Una serie por barra es el método robusto para garantizar colores propios
+    # en todas las versiones de Excel. Con DataPoint el color puede ignorarse.
+    # grouping="stacked" con overlap=100 sobre series de 1 punto cada una da
+    # el aspecto visual de un gráfico de columnas agrupadas con colores fijos.
     chart = BarChart()
     chart.type      = "col"
     chart.grouping  = "clustered"
     chart.title     = "Tiempo Medio (Horas)"
     chart.y_axis.title = "Horas"
     chart.x_axis.title = "Categorías"
-    chart.legend    = None
     chart.width     = 20
     chart.height    = 12
 
-    # Fila 2 (horas), columnas B-E como valores; fila 1 como etiquetas del eje X
-    values = Reference(ws, min_col=2, max_col=5, min_row=2, max_row=2)
-    cats   = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
-    chart.add_data(values)
-    chart.set_categories(cats)
+    # Una categoría compartida para el eje X (fila 1, cols B-E)
+    cats = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
 
-    # Colorear cada barra individualmente mediante DataPoint.
-    # solidFill espera 6 chars RGB (srgbClr), NO 8 chars ARGB: sin prefijo "FF".
-    # NO tocar graphicalProperties.line en un DataPoint de barras: genera un nodo
-    # XML invalido en ese contexto y corrompe el fichero.
     for i, id_p in enumerate(ORDEN):
-        r, g, b  = MAPA[id_p]["rgb"]
-        hex_rgb  = f"{r:02X}{g:02X}{b:02X}"   # 6-char RGB correcto para srgbClr
-        pt = DataPoint(idx=i)
-        pt.graphicalProperties.solidFill = hex_rgb
-        chart.series[0].dPt.append(pt)
+        r, g, b = MAPA[id_p]["rgb"]
+        hex_rgb = f"{r:02X}{g:02X}{b:02X}"
+        col     = i + 2                          # columna B=2, C=3, D=4, E=5
+        cat_name = MAPA[id_p]["n"]
 
+        # Valor: una sola celda de la fila 2 (horas)
+        values = Reference(ws, min_col=col, max_col=col, min_row=2, max_row=2)
+        chart.add_data(values)
+
+        serie = chart.series[i]
+        # Nombre de la serie = la cabecera de la columna (fila 1)
+        serie.title = SeriesLabel(v=cat_name)
+        # Color de relleno de la barra
+        serie.graphicalProperties.solidFill = hex_rgb
+        # Borde del mismo color para que quede limpio
+        serie.graphicalProperties.line.solidFill = hex_rgb
+
+    chart.set_categories(cats)
     ws.add_chart(chart, "A6")
 
     wb.save(ruta_xlsx_origen)
