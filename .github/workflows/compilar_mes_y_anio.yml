@@ -1,0 +1,45 @@
+name: Build Windows EXEs
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          pip install pandas openpyxl xlsxwriter python-pptx playwright pyinstaller
+
+      - name: Compilar anioGenerarDashboard.exe
+        run: |
+          pyinstaller --onefile --name anioGenerarDashboard anioGenerarDashboard.py
+
+      - name: Compilar mesGenerarDashboard.exe
+        run: |
+          pyinstaller --onefile --name mesGenerarDashboard --collect-all playwright mesGenerarDashboard.py
+
+      - name: Subir anioGenerarDashboard.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: anioGenerarDashboard
+          path: dist/anioGenerarDashboard.exe
+          retention-days: 30
+
+      - name: Subir mesGenerarDashboard.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesGenerarDashboard
+          path: dist/mesGenerarDashboard.exe
+          retention-days: 30
