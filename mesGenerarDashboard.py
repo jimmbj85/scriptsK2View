@@ -17,7 +17,7 @@ Salidas (misma carpeta):
     2026_01_Enero_Dashboard_Resumen.xlsx    <- tabla + gráfico actualizados
 
 Dependencias:
-    pip install pandas openpyxl xlsxwriter python-pptx playwright
+    pip install pandas openpyxl python-pptx playwright
     # No se necesita instalar nada: usa Microsoft Edge del sistema
 """
 
@@ -28,7 +28,6 @@ import sys
 
 import pandas as pd
 import openpyxl
-import xlsxwriter
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -360,125 +359,152 @@ def generar_pptx(ruta_png, ruta_pptx, mes_nombre, anio):
 
 
 # =============================================================================
-# PASO 6: XLSX DE RESUMEN con tabla + gráfico (xlsxwriter)
+# PASO 6: XLSX DE RESUMEN con tabla + gráfico (openpyxl nativo)
 # =============================================================================
 
 def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores_peticiones, valores_horas, mes_nombre, anio):
     """
     Abre el xlsx del informe mensual y añade/reemplaza la hoja Dashboard_Resumen.
-    Usa openpyxl para editar el fichero existente.
-    El gráfico se incrusta como imagen PNG generada con xlsxwriter en memoria.
+    Usa openpyxl (API nativa) para escribir la tabla y el gráfico de columnas.
     """
-    import io, tempfile, shutil
+    from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.chart.series import DataPoint
+    from openpyxl.utils import get_column_letter
 
     orden_cols = ORDEN_CATS
 
-    # --- 1. Generar el contenido de la hoja en un xlsx temporal con xlsxwriter ---
-    tmp_path = ruta_xlsx_origen + ".tmp_resumen.xlsx"
-    wb_tmp = xlsxwriter.Workbook(tmp_path)
-    ws_tmp = wb_tmp.add_worksheet("Dashboard_Resumen")
+    # ── Helpers de estilo ────────────────────────────────────────────────────
+    def solid_fill(hex6):
+        return PatternFill(fill_type="solid", fgColor=hex6.lstrip("#"))
 
-    def rgb_xlsw(r, g, b): return f"#{r:02X}{g:02X}{b:02X}"
+    def thin_border():
+        s = Side(style="thin")
+        return Border(left=s, right=s, top=s, bottom=s)
 
-    fmt_hdr_negro = wb_tmp.add_format({"bold": True, "font_color": "white", "bg_color": "#000000", "align": "left",   "border": 1})
-    fmt_hdr_total = wb_tmp.add_format({"bold": True, "font_color": "white", "bg_color": "#334155", "align": "center", "border": 1})
-    fmt_fila_lbl  = wb_tmp.add_format({"bold": True, "align": "left",  "border": 1, "bg_color": "#f8fafc"})
-    fmt_num       = wb_tmp.add_format({"num_format": "0.00", "align": "right", "border": 1})
-    fmt_int       = wb_tmp.add_format({"num_format": "0",    "align": "right", "border": 1})
-    fmt_txt       = wb_tmp.add_format({"align": "right", "border": 1})
+    # ── Abrir workbook destino y (re)crear la hoja ───────────────────────────
+    wb = openpyxl.load_workbook(ruta_xlsx_origen)
+    if "Dashboard_Resumen" in wb.sheetnames:
+        del wb["Dashboard_Resumen"]
+    ws = wb.create_sheet("Dashboard_Resumen")
 
-    cat_fmts = {}
-    for id_p in ORDEN:
+    # ── Anchos de columna ────────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 18
+    for ci in range(5):
+        ws.column_dimensions[get_column_letter(ci + 2)].width = 22
+
+    # ── Fila 1: cabecera ─────────────────────────────────────────────────────
+    ws["A1"].value     = "Categoría"
+    ws["A1"].font      = Font(bold=True, color="FFFFFF")
+    ws["A1"].fill      = solid_fill("000000")
+    ws["A1"].border    = thin_border()
+    ws["A1"].alignment = Alignment(horizontal="left")
+
+    for ci, cat in enumerate(orden_cols):
+        id_p = ORDEN[ci]
         r, g, b = MAPA[id_p]["rgb"]
-        cat_fmts[MAPA[id_p]["n"]] = wb_tmp.add_format({
-            "bold": True, "font_color": "white",
-            "bg_color": rgb_xlsw(r, g, b),
-            "align": "center", "border": 1
-        })
+        c = ws.cell(row=1, column=ci + 2)
+        c.value     = cat
+        c.font      = Font(bold=True, color="FFFFFF")
+        c.fill      = solid_fill(f"{r:02X}{g:02X}{b:02X}")
+        c.border    = thin_border()
+        c.alignment = Alignment(horizontal="center")
 
-    ws_tmp.set_column(0, 0, 18)
-    ws_tmp.set_column(1, 4, 22)
-    ws_tmp.set_column(5, 5, 20)
+    ws["F1"].value     = "TOTAL/MEDIA"
+    ws["F1"].font      = Font(bold=True, color="FFFFFF")
+    ws["F1"].fill      = solid_fill("334155")
+    ws["F1"].border    = thin_border()
+    ws["F1"].alignment = Alignment(horizontal="center")
 
-    ws_tmp.write(0, 0, "Categoría",   fmt_hdr_negro)
+    # ── Fila 2: Tiempo (Horas) ───────────────────────────────────────────────
+    ws["A2"].value     = "Tiempo (Horas)"
+    ws["A2"].font      = Font(bold=True)
+    ws["A2"].fill      = solid_fill("f8fafc")
+    ws["A2"].border    = thin_border()
+    ws["A2"].alignment = Alignment(horizontal="left")
+
     for ci, cat in enumerate(orden_cols):
-        ws_tmp.write(0, ci + 1, cat, cat_fmts[cat])
-    ws_tmp.write(0, 5, "TOTAL/MEDIA", fmt_hdr_total)
+        c = ws.cell(row=2, column=ci + 2)
+        c.value        = valores_horas.get(cat, 0)
+        c.number_format = "0.00"
+        c.alignment    = Alignment(horizontal="right")
+        c.border       = thin_border()
 
-    ws_tmp.write(1, 0, "Tiempo (Horas)", fmt_fila_lbl)
+    ws["F2"].value        = "=ROUND(AVERAGE(B2:E2),2)"
+    ws["F2"].number_format = "0.00"
+    ws["F2"].alignment    = Alignment(horizontal="right")
+    ws["F2"].border       = thin_border()
+
+    # ── Fila 3: Peticiones ───────────────────────────────────────────────────
+    ws["A3"].value     = "Peticiones"
+    ws["A3"].font      = Font(bold=True)
+    ws["A3"].fill      = solid_fill("f8fafc")
+    ws["A3"].border    = thin_border()
+    ws["A3"].alignment = Alignment(horizontal="left")
+
     for ci, cat in enumerate(orden_cols):
-        ws_tmp.write(1, ci + 1, valores_horas.get(cat, 0), fmt_num)
-    ws_tmp.write_formula(1, 5, "=ROUND(AVERAGE(B2:E2),2)", fmt_num)
+        c = ws.cell(row=3, column=ci + 2)
+        c.value        = int(valores_peticiones.get(cat, 0))
+        c.number_format = "0"
+        c.alignment    = Alignment(horizontal="right")
+        c.border       = thin_border()
 
-    ws_tmp.write(2, 0, "Peticiones", fmt_fila_lbl)
-    for ci, cat in enumerate(orden_cols):
-        ws_tmp.write(2, ci + 1, int(valores_peticiones.get(cat, 0)), fmt_int)
-    ws_tmp.write_formula(2, 5, "=SUM(B3:E3)", fmt_int)
+    ws["F3"].value        = "=SUM(B3:E3)"
+    ws["F3"].number_format = "0"
+    ws["F3"].alignment    = Alignment(horizontal="right")
+    ws["F3"].border       = thin_border()
 
-    ws_tmp.write(3, 0, "Formato", fmt_fila_lbl)
+    # ── Fila 4: Formato legible ──────────────────────────────────────────────
+    ws["A4"].value     = "Formato"
+    ws["A4"].font      = Font(bold=True)
+    ws["A4"].fill      = solid_fill("f8fafc")
+    ws["A4"].border    = thin_border()
+    ws["A4"].alignment = Alignment(horizontal="left")
+
     for ci in range(4):
-        col_letra = chr(ord("B") + ci)
-        ws_tmp.write_formula(3, ci + 1,
-            f'=INT({col_letra}2)&" horas "&ROUND(({col_letra}2-INT({col_letra}2))*60,0)&" minutos"',
-            fmt_txt)
-    ws_tmp.write_formula(3, 5,
-        '=INT(F2)&" horas "&ROUND((F2-INT(F2))*60,0)&" minutos"', fmt_txt)
+        col_l = get_column_letter(ci + 2)
+        c = ws.cell(row=4, column=ci + 2)
+        c.value     = f'=INT({col_l}2)&" horas "&ROUND(({col_l}2-INT({col_l}2))*60,0)&" minutos"'
+        c.alignment = Alignment(horizontal="right")
+        c.border    = thin_border()
 
-    chart = wb_tmp.add_chart({"type": "column"})
-    chart.set_title({"name": "Tiempo Medio (Horas)"})
-    chart.set_x_axis({"name": "Categorías"})
-    chart.set_y_axis({"name": "Horas"})
-    chart.set_legend({"none": True})
-    for ci, cat in enumerate(orden_cols):
-        r, g, b = next(MAPA[k]["rgb"] for k in ORDEN if MAPA[k]["n"] == cat)
-        chart.add_series({
-            "name":       cat,
-            "categories": ["Dashboard_Resumen", 0, ci + 1, 0, ci + 1],
-            "values":     ["Dashboard_Resumen", 1, ci + 1, 1, ci + 1],
-            "fill":       {"color": rgb_xlsw(r, g, b)},
-            "data_labels": {"value": True, "num_format": "0.00",
-                            "font": {"bold": True, "color": "white", "size": 10},
-                            "position": "inside_end"},
-        })
-    ws_tmp.insert_chart("A6", chart, {"x_scale": 2.0, "y_scale": 1.5})
-    wb_tmp.close()
+    ws["F4"].value     = '=INT(F2)&" horas "&ROUND((F2-INT(F2))*60,0)&" minutos"'
+    ws["F4"].alignment = Alignment(horizontal="right")
+    ws["F4"].border    = thin_border()
 
-    # --- 2. Abrir el xlsx temporal y extraer la hoja como datos ---
-    wb_src = openpyxl.load_workbook(tmp_path)
-    ws_src = wb_src["Dashboard_Resumen"]
+    # ── Gráfico de columnas ──────────────────────────────────────────────────
+    # Los gráficos en OOXML son objetos XML independientes — NO son imágenes.
+    # Hay que crearlos con la API nativa de openpyxl; no se pueden transferir
+    # desde xlsxwriter leyendo ws._images (que solo contiene PNG/JPEG embebidos).
+    chart = BarChart()
+    chart.type      = "col"
+    chart.grouping  = "clustered"
+    chart.title     = "Tiempo Medio (Horas)"
+    chart.y_axis.title = "Horas"
+    chart.x_axis.title = "Categorías"
+    chart.legend    = None
+    chart.width     = 20
+    chart.height    = 12
 
-    # --- 3. Abrir el xlsx de origen y añadir/reemplazar la hoja ---
-    wb_dst = openpyxl.load_workbook(ruta_xlsx_origen)
-    if "Dashboard_Resumen" in wb_dst.sheetnames:
-        del wb_dst["Dashboard_Resumen"]
-    ws_dst = wb_dst.create_sheet("Dashboard_Resumen")
+    # Fila 2 (horas), columnas B-E como valores; fila 1 como etiquetas del eje X
+    values = Reference(ws, min_col=2, max_col=5, min_row=2, max_row=2)
+    cats   = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
+    chart.add_data(values)
+    chart.set_categories(cats)
 
-    # Copiar celdas, estilos y dimensiones de columna
-    for row in ws_src.iter_rows():
-        for cell in row:
-            dst_cell = ws_dst.cell(row=cell.row, column=cell.column, value=cell.value)
-            if cell.has_style:
-                dst_cell.font      = cell.font.copy()
-                dst_cell.fill      = cell.fill.copy()
-                dst_cell.border    = cell.border.copy()
-                dst_cell.alignment = cell.alignment.copy()
-                dst_cell.number_format = cell.number_format
+    # Colorear cada barra individualmente mediante DataPoint
+    for i, id_p in enumerate(ORDEN):
+        r, g, b   = MAPA[id_p]["rgb"]
+        hex_argb  = f"FF{r:02X}{g:02X}{b:02X}"   # formato ARGB que usa openpyxl
+        pt = DataPoint(idx=i)
+        pt.graphicalProperties.solidFill          = hex_argb
+        pt.graphicalProperties.line.solidFill     = hex_argb
+        chart.series[0].dPt.append(pt)
 
-    for col_dim in ws_src.column_dimensions.values():
-        ws_dst.column_dimensions[col_dim.index].width = col_dim.width
+    ws.add_chart(chart, "A6")
 
-    # Copiar imágenes (el gráfico queda embebido como imagen en el xlsx temporal)
-    from openpyxl.drawing.image import Image as OpxImage
-    for img in ws_src._images:
-        ws_dst.add_image(img)
-
-    wb_dst.save(ruta_xlsx_origen)
-    wb_src.close()
-    wb_dst.close()
-
-    # Limpiar temporal
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    wb.save(ruta_xlsx_origen)
+    wb.close()
 
     print(f"  📋 Hoja Dashboard_Resumen actualizada en: {os.path.basename(ruta_xlsx_origen)}")
 
