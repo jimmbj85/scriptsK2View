@@ -492,13 +492,15 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     chart.add_data(values)
     chart.set_categories(cats)
 
-    # Colorear cada barra individualmente mediante DataPoint
+    # Colorear cada barra individualmente mediante DataPoint.
+    # solidFill espera 6 chars RGB (srgbClr), NO 8 chars ARGB: sin prefijo "FF".
+    # NO tocar graphicalProperties.line en un DataPoint de barras: genera un nodo
+    # XML invalido en ese contexto y corrompe el fichero.
     for i, id_p in enumerate(ORDEN):
-        r, g, b   = MAPA[id_p]["rgb"]
-        hex_argb  = f"FF{r:02X}{g:02X}{b:02X}"   # formato ARGB que usa openpyxl
+        r, g, b  = MAPA[id_p]["rgb"]
+        hex_rgb  = f"{r:02X}{g:02X}{b:02X}"   # 6-char RGB correcto para srgbClr
         pt = DataPoint(idx=i)
-        pt.graphicalProperties.solidFill          = hex_argb
-        pt.graphicalProperties.line.solidFill     = hex_argb
+        pt.graphicalProperties.solidFill = hex_rgb
         chart.series[0].dPt.append(pt)
 
     ws.add_chart(chart, "A6")
