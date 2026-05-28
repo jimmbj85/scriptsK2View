@@ -343,15 +343,36 @@ def generar_pptx(ruta_png, ruta_pptx, mes_nombre, anio):
     slide.background.fill.solid()
     slide.background.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
-    # Incrustar la imagen capturada ocupando casi toda la diapositiva
+    # Incrustar la imagen manteniendo el ratio original del PNG (1080×600 = 1.8:1).
+    # Forzar width Y height al mismo tiempo estira el donut; aquí se ajusta por
+    # ancho y se centra verticalmente el espacio sobrante.
+    from PIL import Image as PilImage
+    with PilImage.open(ruta_png) as _im:
+        img_w_px, img_h_px = _im.size
+    img_ratio = img_w_px / img_h_px  # ej. 1080/600 = 1.8
+
     slide_w = prs.slide_width
     slide_h = prs.slide_height
     margin  = Inches(0.1)
+
+    avail_w = slide_w - 2 * margin
+    avail_h = slide_h - 2 * margin
+
+    # Ajustar por ancho; si la altura resultante supera la disponible, ajustar por alto
+    pic_w = avail_w
+    pic_h = int(pic_w / img_ratio)
+    if pic_h > avail_h:
+        pic_h = avail_h
+        pic_w = int(pic_h * img_ratio)
+
+    left = margin + (avail_w - pic_w) // 2   # centrado horizontal
+    top  = margin + (avail_h - pic_h) // 2   # centrado vertical
+
     slide.shapes.add_picture(
         ruta_png,
-        left=margin, top=margin,
-        width=slide_w - 2 * margin,
-        height=slide_h - 2 * margin,
+        left=left, top=top,
+        width=pic_w,
+        height=pic_h,
     )
 
     prs.save(ruta_pptx)
