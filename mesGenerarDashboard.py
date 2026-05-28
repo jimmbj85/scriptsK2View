@@ -222,6 +222,7 @@ def leer_datos_mes(ruta_xlsx):
             "r_txt":   rating_txt,
             "r_width": rating_barw,
             "r_val":   round(rating_val, 2) if has_data else None,
+            "r_count": count_val,
         })
 
     wb.close()
@@ -519,14 +520,21 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
         c.alignment = Alignment(horizontal="right")
         c.border    = thin_border()
 
-    # TOTAL/MEDIA de valoración: promedio de las celdas con valor numérico
-    ws["F5"].value        = "=IFERROR(ROUND(AVERAGE(IF(ISNUMBER(B5:E5),B5:E5)),2),\"N/A\")"
-    ws["F5"].number_format = "0.00"
-    ws["F5"].alignment    = Alignment(horizontal="right")
-    ws["F5"].border       = thin_border()
+    # TOTAL/MEDIA de valoración: media ponderada real (suma(val*count) / suma(count))
+    # Se calcula en Python con los datos disponibles para evitar fórmulas array complejas
+    # con celdas "N/A" mezcladas con números.
+    vals_num   = [(d["r_val"], d["r_count"]) for d in data_final if d["r_val"] is not None and d["r_count"] > 0]
+    if vals_num:
+        media_pond = round(sum(v * c for v, c in vals_num) / sum(c for _, c in vals_num), 2)
+        ws["F5"].value        = media_pond
+        ws["F5"].number_format = "0.00"
+    else:
+        ws["F5"].value = "N/A"
+    ws["F5"].alignment = Alignment(horizontal="right")
+    ws["F5"].border    = thin_border()
 
-    # ── Fila 6: Valoración texto (X.X/5) ────────────────────────────────────
-    ws["A6"].value     = "Valoración (texto)"
+    # ── Fila 6: Valoraciones (nº total de encuestas por tipo) ────────────────
+    ws["A6"].value     = "Valoraciones"
     ws["A6"].font      = Font(bold=True)
     ws["A6"].fill      = solid_fill("f8fafc")
     ws["A6"].border    = thin_border()
@@ -535,25 +543,35 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     for d in data_final:
         ci = orden_cols.index(d["cat"])
         c  = ws.cell(row=6, column=ci + 2)
-        c.value     = d["r_txt"]
-        c.alignment = Alignment(horizontal="right")
-        c.border    = thin_border()
+        c.value        = d["r_count"]
+        c.number_format = "0"
+        c.alignment    = Alignment(horizontal="right")
+        c.border       = thin_border()
 
-    ws["F6"].value     = '=IFERROR(TEXT(F5,"0.00")&"/5","N/A")'
-    ws["F6"].alignment = Alignment(horizontal="right")
-    ws["F6"].border    = thin_border()
+    ws["F6"].value        = "=SUM(B6:E6)"
+    ws["F6"].number_format = "0"
+    ws["F6"].alignment    = Alignment(horizontal="right")
+    ws["F6"].border       = thin_border()
 
-    # ── Gráfico 1: Tiempo Medio (Horas) — mitad izquierda ───────────────────
-    # Empieza en fila 8 (debajo de las 6 filas de tabla + fila en blanco).
-    # Ancho ~10 cm (≈ mitad del ancho de 20 cm original) para dejar sitio al gráfico 2.
+    # ── Helpers de anclaje exacto (TwoCellAnchor: fila/col 0-based) ────────────
+    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+
+    def _anchor(col_from, row_from, col_to, row_to):
+        """Devuelve un TwoCellAnchor que ocupa exactamente las celdas indicadas (0-based)."""
+        anchor = TwoCellAnchor()
+        anchor._from = AnchorMarker(col=col_from, row=row_from, colOff=0, rowOff=0)
+        anchor.to    = AnchorMarker(col=col_to,   row=row_to,   colOff=0, rowOff=0)
+        return anchor
+
+    # ── Gráfico 1: Tiempo Medio (Horas) — columnas A–D, filas 8–20 ─────────
+    # AnchorMarker es 0-based: col A=0, fila 8=7 (índice); fila 20=19 (límite to)
     chart = BarChart()
     chart.type         = "col"
     chart.grouping     = "clustered"
     chart.title        = "Tiempo Medio (Horas)"
     chart.y_axis.title = "Horas"
     chart.x_axis.title = "Categorías"
-    chart.width        = 14
-    chart.height       = 10
 
     cats = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
 
@@ -582,9 +600,11 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
         serie.dLbls = dLbls
 
     chart.set_categories(cats)
-    ws.add_chart(chart, "A8")
+    chart.legend = None
+    chart.anchor = _anchor(col_from=0, row_from=7, col_to=4, row_to=19)  # A8:E20
+    ws.add_chart(chart)
 
-    # ── Gráfico 2: Valoración Media — mitad derecha ──────────────────────────
+    # ── Gráfico 2: Valoración Media — columnas E en adelante, filas 8–20 ────
     # Solo se dibuja si al menos una categoría tiene valoración numérica.
     cats_con_rating = [d for d in data_final if d.get("r_val") is not None]
     if cats_con_rating:
@@ -594,8 +614,6 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
         chart2.title        = "Valoración Media (sobre 5)"
         chart2.y_axis.title = "Puntuación"
         chart2.x_axis.title = "Categorías"
-        chart2.width        = 14
-        chart2.height       = 10
 
         cats2 = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
 
@@ -624,8 +642,9 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
             serie2.dLbls = dLbls2
 
         chart2.set_categories(cats2)
-        # Anclar en columna G (columna 7) para quedar a la derecha del primer gráfico
-        ws.add_chart(chart2, "H8")
+        chart2.legend = None
+        chart2.anchor = _anchor(col_from=4, row_from=7, col_to=9, row_to=19)  # E8:J20
+        ws.add_chart(chart2)
 
     wb.save(ruta_xlsx_origen)
     wb.close()
