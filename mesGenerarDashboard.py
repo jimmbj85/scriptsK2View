@@ -221,6 +221,7 @@ def leer_datos_mes(ruta_xlsx):
             "icon":    MAPA[id_p]["i"],
             "r_txt":   rating_txt,
             "r_width": rating_barw,
+            "r_val":   round(rating_val, 2) if has_data else None,
         })
 
     wb.close()
@@ -496,26 +497,70 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     ws["F4"].alignment = Alignment(horizontal="right")
     ws["F4"].border    = thin_border()
 
-    # ── Gráfico de columnas ──────────────────────────────────────────────────
-    # Una serie por barra garantiza colores propios en todas las versiones de Excel.
-    # Altura: el gráfico empieza en fila 6; ajustamos para acabar antes de fila 20.
-    #   14 filas × 15 pt/fila × 0.0353 cm/pt ≈ 7.4 cm → usamos 7.0 cm.
+    # ── Fila 5: Valoración media (numérica) ──────────────────────────────────
+    ws["A5"].value     = "Valoración Media"
+    ws["A5"].font      = Font(bold=True)
+    ws["A5"].fill      = solid_fill("f8fafc")
+    ws["A5"].border    = thin_border()
+    ws["A5"].alignment = Alignment(horizontal="left")
+
+    valores_rating = {}
+    for d in data_final:
+        valores_rating[d["cat"]] = d.get("r_val")
+
+    for ci, cat in enumerate(orden_cols):
+        c = ws.cell(row=5, column=ci + 2)
+        val = valores_rating.get(cat)
+        if val is not None:
+            c.value        = val
+            c.number_format = "0.00"
+        else:
+            c.value = "N/A"
+        c.alignment = Alignment(horizontal="right")
+        c.border    = thin_border()
+
+    # TOTAL/MEDIA de valoración: promedio de las celdas con valor numérico
+    ws["F5"].value        = "=IFERROR(ROUND(AVERAGE(IF(ISNUMBER(B5:E5),B5:E5)),2),\"N/A\")"
+    ws["F5"].number_format = "0.00"
+    ws["F5"].alignment    = Alignment(horizontal="right")
+    ws["F5"].border       = thin_border()
+
+    # ── Fila 6: Valoración texto (X.X/5) ────────────────────────────────────
+    ws["A6"].value     = "Valoración (texto)"
+    ws["A6"].font      = Font(bold=True)
+    ws["A6"].fill      = solid_fill("f8fafc")
+    ws["A6"].border    = thin_border()
+    ws["A6"].alignment = Alignment(horizontal="left")
+
+    for d in data_final:
+        ci = orden_cols.index(d["cat"])
+        c  = ws.cell(row=6, column=ci + 2)
+        c.value     = d["r_txt"]
+        c.alignment = Alignment(horizontal="right")
+        c.border    = thin_border()
+
+    ws["F6"].value     = '=IFERROR(TEXT(F5,"0.00")&"/5","N/A")'
+    ws["F6"].alignment = Alignment(horizontal="right")
+    ws["F6"].border    = thin_border()
+
+    # ── Gráfico 1: Tiempo Medio (Horas) — mitad izquierda ───────────────────
+    # Empieza en fila 8 (debajo de las 6 filas de tabla + fila en blanco).
+    # Ancho ~10 cm (≈ mitad del ancho de 20 cm original) para dejar sitio al gráfico 2.
     chart = BarChart()
     chart.type         = "col"
     chart.grouping     = "clustered"
     chart.title        = "Tiempo Medio (Horas)"
     chart.y_axis.title = "Horas"
     chart.x_axis.title = "Categorías"
-    chart.width        = 20
-    chart.height       = 7      # reducido para caber en filas 6-19
+    chart.width        = 14
+    chart.height       = 10
 
-    # Una categoría compartida para el eje X (fila 1, cols B-E)
     cats = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
 
     for i, id_p in enumerate(ORDEN):
         r, g, b  = MAPA[id_p]["rgb"]
         hex_rgb  = f"{r:02X}{g:02X}{b:02X}"
-        col      = i + 2          # columna B=2, C=3, D=4, E=5
+        col      = i + 2
         cat_name = MAPA[id_p]["n"]
 
         values = Reference(ws, min_col=col, max_col=col, min_row=2, max_row=2)
@@ -526,8 +571,6 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
         serie.graphicalProperties.solidFill      = hex_rgb
         serie.graphicalProperties.line.solidFill = hex_rgb
 
-        # Etiquetas de valor via API openpyxl (posición y visibilidad).
-        # La fuente blanca se inyecta después en el ZIP — ver _patch_chart_labels_font.
         dLbls = DataLabelList()
         dLbls.showVal          = True
         dLbls.dLblPos          = "inEnd"
@@ -539,7 +582,50 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
         serie.dLbls = dLbls
 
     chart.set_categories(cats)
-    ws.add_chart(chart, "A6")
+    ws.add_chart(chart, "A8")
+
+    # ── Gráfico 2: Valoración Media — mitad derecha ──────────────────────────
+    # Solo se dibuja si al menos una categoría tiene valoración numérica.
+    cats_con_rating = [d for d in data_final if d.get("r_val") is not None]
+    if cats_con_rating:
+        chart2 = BarChart()
+        chart2.type         = "col"
+        chart2.grouping     = "clustered"
+        chart2.title        = "Valoración Media (sobre 5)"
+        chart2.y_axis.title = "Puntuación"
+        chart2.x_axis.title = "Categorías"
+        chart2.width        = 14
+        chart2.height       = 10
+
+        cats2 = Reference(ws, min_col=2, max_col=5, min_row=1, max_row=1)
+
+        for i, id_p in enumerate(ORDEN):
+            r, g, b  = MAPA[id_p]["rgb"]
+            hex_rgb  = f"{r:02X}{g:02X}{b:02X}"
+            col      = i + 2
+            cat_name = MAPA[id_p]["n"]
+
+            values2 = Reference(ws, min_col=col, max_col=col, min_row=5, max_row=5)
+            chart2.add_data(values2)
+
+            serie2 = chart2.series[i]
+            serie2.title = SeriesLabel(v=cat_name)
+            serie2.graphicalProperties.solidFill      = hex_rgb
+            serie2.graphicalProperties.line.solidFill = hex_rgb
+
+            dLbls2 = DataLabelList()
+            dLbls2.showVal          = True
+            dLbls2.dLblPos          = "inEnd"
+            dLbls2.showLegendKey    = False
+            dLbls2.showCatName      = False
+            dLbls2.showSerName      = False
+            dLbls2.showPercent      = False
+            dLbls2.showBubbleSize   = False
+            serie2.dLbls = dLbls2
+
+        chart2.set_categories(cats2)
+        # Anclar en columna G (columna 7) para quedar a la derecha del primer gráfico
+        ws.add_chart(chart2, "H8")
 
     wb.save(ruta_xlsx_origen)
     wb.close()
