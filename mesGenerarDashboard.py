@@ -668,15 +668,12 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
 def _patch_chart_labels_font(xlsx_path, charts_data=None):
     """
     Post-procesa los chart*.xml dentro del xlsx para:
-      1. Mostrar los valores del eje Y (tickLbl visible).
-      2. Por cada serie: si su valor es "pequeño" respecto al máximo del gráfico
-         (< 15 % del rango), coloca la etiqueta en 'outEnd' (encima de la barra);
-         si no, en 'inEnd' (dentro). En ambos casos:
-           - Fuente blanca negrita 10 pt.
-           - Contorno (borde) del color de la barra para que destaque sobre fondo blanco.
+      1. Mostrar los valores del eje Y (numFmt + delete=0 + tickLblPos).
+      2. Por cada serie: si su valor es < 20% del máximo → etiqueta 'outEnd'
+         con fuente del COLOR de la barra (visible sobre fondo blanco);
+         si no → 'inEnd' con fuente blanca.
 
     charts_data: lista de listas, una por gráfico, con tuplas (valor_float|None, hex_rgb).
-                 El orden debe coincidir con el orden de <c:ser> en el XML.
     """
     import zipfile, re
     from lxml import etree
@@ -684,10 +681,13 @@ def _patch_chart_labels_font(xlsx_path, charts_data=None):
     _nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     _nsC = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
-    UMBRAL_PEQUENO = 0.20   # barra < 20 % del máximo → etiqueta arriba
+    # Umbral conservador: si la barra ocupa menos del 30% de la escala,
+    # la etiqueta va fuera (outEnd). Así evitamos que quede a caballo
+    # entre el interior y el borde de la barra.
+    UMBRAL_PEQUENO = 0.30
 
-    def _txPr(hex_color, outside):
-        """txPr con fuente blanca y contorno del color de la barra."""
+    def _txPr(font_hex):
+        """txPr con fuente negrita 10pt del color indicado."""
         txPr   = etree.Element(f"{{{_nsC}}}txPr")
         bodyPr = etree.SubElement(txPr, f"{{{_nsA}}}bodyPr")
         bodyPr.set("rot", "0")
@@ -698,26 +698,13 @@ def _patch_chart_labels_font(xlsx_path, charts_data=None):
         dPr.set("b",    "1")
         dPr.set("sz",   "1000")
         dPr.set("lang", "es-ES")
-
-        # Relleno: blanco siempre
         sf   = etree.SubElement(dPr, f"{{{_nsA}}}solidFill")
         srgb = etree.SubElement(sf,  f"{{{_nsA}}}srgbClr")
-        srgb.set("val", "FFFFFF")
-
-        # Contorno de la letra: color de la barra (solo visible cuando está fuera)
-        if outside:
-            ln   = etree.SubElement(dPr, f"{{{_nsA}}}ln")
-            ln.set("w", "6350")   # 0.5 pt en EMU de línea de texto
-            sfLn = etree.SubElement(ln,  f"{{{_nsA}}}solidFill")
-            sLn  = etree.SubElement(sfLn, f"{{{_nsA}}}srgbClr")
-            sLn.set("val", hex_color)
-
+        srgb.set("val", font_hex)
         return txPr
 
-    def _patch_dLbls(dLbls_node, hex_color, outside):
-        """Aplica posición y txPr a un nodo <c:dLbls>."""
+    def _patch_dLbls(dLbls_node, font_hex, outside):
         nsC = _nsC
-        # Actualizar posición
         pos_tag = f"{{{nsC}}}dLblPos"
         pos_el  = dLbls_node.find(pos_tag)
         new_pos = "outEnd" if outside else "inEnd"
@@ -727,22 +714,54 @@ def _patch_chart_labels_font(xlsx_path, charts_data=None):
             pos_el = etree.SubElement(dLbls_node, pos_tag)
             pos_el.set("val", new_pos)
 
-        # Quitar txPr anterior si existe y añadir el nuevo
         old = dLbls_node.find(f"{{{nsC}}}txPr")
         if old is not None:
             dLbls_node.remove(old)
-        nf = dLbls_node.find(f"{{{nsC}}}numFmt")
-        txPr = _txPr(hex_color, outside)
+        nf   = dLbls_node.find(f"{{{nsC}}}numFmt")
+        txPr = _txPr(font_hex)
         if nf is not None:
             nf.addnext(txPr)
         else:
             dLbls_node.insert(0, txPr)
 
+    def _fix_val_axis(valAx_node):
+        """Garantiza que el eje de valores muestra etiquetas numéricas."""
+        nsC = _nsC
+        nsA = _nsA
+
+        # delete=0 → eje visible
+        del_el = valAx_node.find(f"{{{nsC}}}delete")
+        if del_el is None:
+            del_el = etree.SubElement(valAx_node, f"{{{nsC}}}delete")
+        del_el.set("val", "0")
+
+        # tickLblPos = nextTo
+        tl = valAx_node.find(f"{{{nsC}}}tickLblPos")
+        if tl is None:
+            tl = etree.SubElement(valAx_node, f"{{{nsC}}}tickLblPos")
+        tl.set("val", "nextTo")
+
+        # numFmt → formato general numérico
+        nf = valAx_node.find(f"{{{nsC}}}numFmt")
+        if nf is None:
+            nf = etree.Element(f"{{{nsC}}}numFmt")
+            # insertar después del título si existe, si no al principio
+            title_el = valAx_node.find(f"{{{nsC}}}title")
+            if title_el is not None:
+                title_el.addnext(nf)
+            else:
+                valAx_node.insert(0, nf)
+        nf.set("formatCode",   "General")
+        nf.set("sourceLinked", "0")
+
+        # spPr con fuente legible para los tick labels (negro por defecto)
+        # Excel usará el tema si no hay txPr en valAx — no añadimos txPr
+        # para no forzar un color que rompa el tema.
+
     tmp_path = xlsx_path + "._patch.tmp"
     with zipfile.ZipFile(xlsx_path, "r") as zin, \
-         zipfile.ZipFile(tmp_path,  "w", zipfile.ZIP_DEFLATED) as zout:
+         zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
 
-        # Ordenar chart*.xml para emparejarlos con charts_data por índice
         chart_files = sorted(
             [n for n in zin.namelist()
              if re.match(r"xl/charts/chart\d+\.xml$", n)],
@@ -753,40 +772,34 @@ def _patch_chart_labels_font(xlsx_path, charts_data=None):
             data = zin.read(item.filename)
 
             if item.filename in chart_files:
-                chart_idx = chart_files.index(item.filename)
+                chart_idx  = chart_files.index(item.filename)
                 series_info = (charts_data[chart_idx]
                                if charts_data and chart_idx < len(charts_data)
                                else [])
 
-                # Valores numéricos válidos para calcular el máximo del gráfico
-                vals = [v for v, _ in series_info if v is not None]
+                vals    = [v for v, _ in series_info if v is not None]
                 max_val = max(vals) if vals else 1.0
 
                 root = etree.fromstring(data)
 
-                # ── Eje Y: forzar visibilidad de etiquetas de tick ────────────
+                # Eje Y
                 for valAx in root.iter(f"{{{_nsC}}}valAx"):
-                    tl = valAx.find(f"{{{_nsC}}}tickLblPos")
-                    if tl is None:
-                        tl = etree.SubElement(valAx, f"{{{_nsC}}}tickLblPos")
-                    tl.set("val", "nextTo")
-                    # Asegurar que el eje no está borrado
-                    del_el = valAx.find(f"{{{_nsC}}}delete")
-                    if del_el is not None:
-                        del_el.set("val", "0")
+                    _fix_val_axis(valAx)
 
-                # ── Series: posición condicional + estilo ─────────────────────
+                # Series
                 for si, ser in enumerate(root.iter(f"{{{_nsC}}}ser")):
                     if si < len(series_info):
-                        val, hex_color = series_info[si]
+                        val, bar_hex = series_info[si]
                     else:
-                        val, hex_color = None, "FFFFFF"
+                        val, bar_hex = None, "333333"
 
-                    outside = (val is None) or (max_val > 0 and val / max_val < UMBRAL_PEQUENO)
+                    outside   = (val is None) or (max_val > 0 and val / max_val < UMBRAL_PEQUENO)
+                    # inEnd → fuente blanca; outEnd → fuente del color de la barra
+                    font_hex  = bar_hex if outside else "FFFFFF"
 
                     dLbls = ser.find(f"{{{_nsC}}}dLbls")
                     if dLbls is not None:
-                        _patch_dLbls(dLbls, hex_color, outside)
+                        _patch_dLbls(dLbls, font_hex, outside)
 
                 data = etree.tostring(
                     root, xml_declaration=True, encoding="UTF-8", standalone=True
