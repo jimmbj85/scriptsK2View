@@ -605,7 +605,6 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     ws.add_chart(chart)
 
     # ── Gráfico 2: Valoración Media — columnas E en adelante, filas 8–20 ────
-    # Solo se dibuja si al menos una categoría tiene valoración numérica.
     cats_con_rating = [d for d in data_final if d.get("r_val") is not None]
     if cats_con_rating:
         chart2 = BarChart()
@@ -649,62 +648,150 @@ def generar_xlsx_resumen(ruta_xlsx_origen, data_final, total_peticiones, valores
     wb.save(ruta_xlsx_origen)
     wb.close()
 
-    # ── Post-proceso ZIP: inyectar fuente blanca negrita en <c:dLbls> ────────
-    # serie._element no existe en series creadas programáticamente (solo en las
-    # leídas desde XML), así que la fuente se añade directamente sobre el chart
-    # XML dentro del ZIP una vez guardado.
-    _patch_chart_labels_font(ruta_xlsx_origen)
+    # ── Post-proceso ZIP ─────────────────────────────────────────────────────
+    # Datos por gráfico: lista de (valor_float_o_None, hex_rgb_str) en orden ORDEN
+    chart1_series = [
+        (valores_horas.get(MAPA[id_p]["n"]), "%02X%02X%02X" % MAPA[id_p]["rgb"])
+        for id_p in ORDEN
+    ]
+    chart2_series = [
+        (next((d["r_val"] for d in data_final if d["cat"] == MAPA[id_p]["n"]), None),
+         "%02X%02X%02X" % MAPA[id_p]["rgb"])
+        for id_p in ORDEN
+    ]
+    charts_data = [chart1_series, chart2_series] if cats_con_rating else [chart1_series]
+    _patch_chart_labels_font(ruta_xlsx_origen, charts_data)
 
     print(f"  📋 Hoja Dashboard_Resumen actualizada en: {os.path.basename(ruta_xlsx_origen)}")
 
 
-def _patch_chart_labels_font(xlsx_path):
+def _patch_chart_labels_font(xlsx_path, charts_data=None):
     """
-    Abre el xlsx como ZIP, localiza todos los chart*.xml y añade fuente blanca
-    negrita a cada nodo <c:dLbls> que no tenga ya un <c:txPr>.
+    Post-procesa los chart*.xml dentro del xlsx para:
+      1. Mostrar los valores del eje Y (tickLbl visible).
+      2. Por cada serie: si su valor es "pequeño" respecto al máximo del gráfico
+         (< 15 % del rango), coloca la etiqueta en 'outEnd' (encima de la barra);
+         si no, en 'inEnd' (dentro). En ambos casos:
+           - Fuente blanca negrita 10 pt.
+           - Contorno (borde) del color de la barra para que destaque sobre fondo blanco.
+
+    charts_data: lista de listas, una por gráfico, con tuplas (valor_float|None, hex_rgb).
+                 El orden debe coincidir con el orden de <c:ser> en el XML.
     """
-    import zipfile
+    import zipfile, re
     from lxml import etree
 
     _nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     _nsC = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
-    def _txPr_blanco():
-        txPr = etree.Element(f"{{{_nsC}}}txPr")
+    UMBRAL_PEQUENO = 0.20   # barra < 20 % del máximo → etiqueta arriba
+
+    def _txPr(hex_color, outside):
+        """txPr con fuente blanca y contorno del color de la barra."""
+        txPr   = etree.Element(f"{{{_nsC}}}txPr")
         bodyPr = etree.SubElement(txPr, f"{{{_nsA}}}bodyPr")
         bodyPr.set("rot", "0")
         etree.SubElement(txPr, f"{{{_nsA}}}lstStyle")
         p   = etree.SubElement(txPr, f"{{{_nsA}}}p")
-        pPr = etree.SubElement(p,   f"{{{_nsA}}}pPr")
-        dPr = etree.SubElement(pPr, f"{{{_nsA}}}defRPr")
+        pPr = etree.SubElement(p,    f"{{{_nsA}}}pPr")
+        dPr = etree.SubElement(pPr,  f"{{{_nsA}}}defRPr")
         dPr.set("b",    "1")
-        dPr.set("sz",   "1000")   # 10 pt
+        dPr.set("sz",   "1000")
         dPr.set("lang", "es-ES")
-        sf   = etree.SubElement(dPr,  f"{{{_nsA}}}solidFill")
-        srgb = etree.SubElement(sf,   f"{{{_nsA}}}srgbClr")
+
+        # Relleno: blanco siempre
+        sf   = etree.SubElement(dPr, f"{{{_nsA}}}solidFill")
+        srgb = etree.SubElement(sf,  f"{{{_nsA}}}srgbClr")
         srgb.set("val", "FFFFFF")
+
+        # Contorno de la letra: color de la barra (solo visible cuando está fuera)
+        if outside:
+            ln   = etree.SubElement(dPr, f"{{{_nsA}}}ln")
+            ln.set("w", "6350")   # 0.5 pt en EMU de línea de texto
+            sfLn = etree.SubElement(ln,  f"{{{_nsA}}}solidFill")
+            sLn  = etree.SubElement(sfLn, f"{{{_nsA}}}srgbClr")
+            sLn.set("val", hex_color)
+
         return txPr
 
+    def _patch_dLbls(dLbls_node, hex_color, outside):
+        """Aplica posición y txPr a un nodo <c:dLbls>."""
+        nsC = _nsC
+        # Actualizar posición
+        pos_tag = f"{{{nsC}}}dLblPos"
+        pos_el  = dLbls_node.find(pos_tag)
+        new_pos = "outEnd" if outside else "inEnd"
+        if pos_el is not None:
+            pos_el.set("val", new_pos)
+        else:
+            pos_el = etree.SubElement(dLbls_node, pos_tag)
+            pos_el.set("val", new_pos)
+
+        # Quitar txPr anterior si existe y añadir el nuevo
+        old = dLbls_node.find(f"{{{nsC}}}txPr")
+        if old is not None:
+            dLbls_node.remove(old)
+        nf = dLbls_node.find(f"{{{nsC}}}numFmt")
+        txPr = _txPr(hex_color, outside)
+        if nf is not None:
+            nf.addnext(txPr)
+        else:
+            dLbls_node.insert(0, txPr)
+
     tmp_path = xlsx_path + "._patch.tmp"
-    with zipfile.ZipFile(xlsx_path, "r") as zin,          zipfile.ZipFile(tmp_path,  "w", zipfile.ZIP_DEFLATED) as zout:
+    with zipfile.ZipFile(xlsx_path, "r") as zin, \
+         zipfile.ZipFile(tmp_path,  "w", zipfile.ZIP_DEFLATED) as zout:
+
+        # Ordenar chart*.xml para emparejarlos con charts_data por índice
+        chart_files = sorted(
+            [n for n in zin.namelist()
+             if re.match(r"xl/charts/chart\d+\.xml$", n)],
+            key=lambda s: int(re.search(r"\d+", s.split("/")[-1]).group())
+        )
 
         for item in zin.infolist():
             data = zin.read(item.filename)
-            if (item.filename.startswith("xl/charts/chart")
-                    and item.filename.endswith(".xml")):
+
+            if item.filename in chart_files:
+                chart_idx = chart_files.index(item.filename)
+                series_info = (charts_data[chart_idx]
+                               if charts_data and chart_idx < len(charts_data)
+                               else [])
+
+                # Valores numéricos válidos para calcular el máximo del gráfico
+                vals = [v for v, _ in series_info if v is not None]
+                max_val = max(vals) if vals else 1.0
+
                 root = etree.fromstring(data)
-                for dLbls in root.iter(f"{{{_nsC}}}dLbls"):
-                    if dLbls.find(f"{{{_nsC}}}txPr") is None:
-                        # Insertar txPr justo después de numFmt si existe
-                        nf = dLbls.find(f"{{{_nsC}}}numFmt")
-                        txPr = _txPr_blanco()
-                        if nf is not None:
-                            nf.addnext(txPr)
-                        else:
-                            dLbls.insert(0, txPr)
+
+                # ── Eje Y: forzar visibilidad de etiquetas de tick ────────────
+                for valAx in root.iter(f"{{{_nsC}}}valAx"):
+                    tl = valAx.find(f"{{{_nsC}}}tickLblPos")
+                    if tl is None:
+                        tl = etree.SubElement(valAx, f"{{{_nsC}}}tickLblPos")
+                    tl.set("val", "nextTo")
+                    # Asegurar que el eje no está borrado
+                    del_el = valAx.find(f"{{{_nsC}}}delete")
+                    if del_el is not None:
+                        del_el.set("val", "0")
+
+                # ── Series: posición condicional + estilo ─────────────────────
+                for si, ser in enumerate(root.iter(f"{{{_nsC}}}ser")):
+                    if si < len(series_info):
+                        val, hex_color = series_info[si]
+                    else:
+                        val, hex_color = None, "FFFFFF"
+
+                    outside = (val is None) or (max_val > 0 and val / max_val < UMBRAL_PEQUENO)
+
+                    dLbls = ser.find(f"{{{_nsC}}}dLbls")
+                    if dLbls is not None:
+                        _patch_dLbls(dLbls, hex_color, outside)
+
                 data = etree.tostring(
                     root, xml_declaration=True, encoding="UTF-8", standalone=True
                 )
+
             zout.writestr(item, data)
 
     os.replace(tmp_path, xlsx_path)
