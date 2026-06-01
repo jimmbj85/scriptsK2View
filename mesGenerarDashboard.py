@@ -146,7 +146,7 @@ def leer_datos_mes(ruta_xlsx):
     Lee las pestañas 1-, 3-, 5-, 7- y 9- del xlsx.
     Devuelve (data_final, ratings_dict).
     """
-    wb = openpyxl.load_workbook(ruta_xlsx, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(ruta_xlsx, data_only=True)  # read_only=True incompatible con tablas estructuradas de Excel
 
     # --- Ratings (pestaña 9-) ---
     ratings_dict = {}
