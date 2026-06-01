@@ -145,7 +145,7 @@ def leer_informes(carpeta, meses_a_procesar):
         print(f"📂 Procesando: {nombre_archivo} → MES: {cod_mes}")
 
         try:
-            wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+            wb = openpyxl.load_workbook(ruta, data_only=True)  # read_only=True incompatible con tablas estructuradas de Excel
         except Exception as e:
             print(f"  ⚠️ No se pudo abrir {nombre_archivo}: {e}")
             continue
@@ -344,7 +344,7 @@ def leer_anio_anterior(carpeta, anio_anterior):
 
     print(f"📅 Leyendo año anterior: {nombre}")
     try:
-        wb  = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+        wb  = openpyxl.load_workbook(ruta, data_only=True)  # read_only=True incompatible con tablas estructuradas de Excel
         ws  = wb.active
         raw = [list(row) for row in ws.iter_rows(values_only=True)]
         wb.close()
